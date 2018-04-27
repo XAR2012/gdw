@@ -1,0 +1,11 @@
+stage:
+    database: bloodmoondb
+    schema: incoming
+
+error:
+    database: bloodmoondb
+    schema: incoming
+
+source:
+    database: bloodmoondb
+    schema: source
