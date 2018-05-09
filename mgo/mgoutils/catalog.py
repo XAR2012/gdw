@@ -5,7 +5,7 @@ import sqlalchemy
 from sqlalchemy import sql
 from sqlalchemy.schema import Table
 
-ALIAS_DIRECTORY = 'metadata/alias'
+METADATA_DIRECTORY = 'metadata'
 PSA_PATH = 'psa'
 
 class GDWTable(Table):
@@ -47,15 +47,15 @@ class GDWTableDict(dict):
 
 class GDWAliasDict(dict):
     def __init__(self):
-        self.alias_directory = ALIAS_DIRECTORY
+        self.metadata_directory = METADATA_DIRECTORY
 
     def __getitem__(self, alias_name):
         try:
             alias = dict.__getitem__(self, alias_name)
         except KeyError:
             with open(path.join(
-                        self.alias_directory,
-                        '{}.yaml'.format(alias_name))) as f:
+                        self.metadata_directory,
+                        '{}.alias.yaml'.format(alias_name))) as f:
                 alias = yaml.load(f)
             dict.__setitem__(self, alias_name, alias)
         return alias

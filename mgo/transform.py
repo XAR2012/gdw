@@ -5,19 +5,20 @@ import de_common.scriptutil as scriptutil
 from de_common.datetimeutil import days_ago
 from mgoutils.catalog import GDWCatalog
 from sqlalchemy import text
-from sqlalchemy.sql import select, case, and_, or_, not_, literal_column
-from sqlalchemy.sql.functions import concat, coalesce
+from sqlalchemy.sql import select, literal_column
+from sqlalchemy.sql.expression import union_all, alias
 
 __author__ = 'jvalenzuela'
 DISPLAY_NAME = scriptutil.get_display_name(__file__)
 TOOL_NAME = scriptutil.get_tool_name(DISPLAY_NAME)
 _logger = logging.getLogger(TOOL_NAME)
 
+
 class GDWTransform(CronJob):
     def __init__(self):
         super(GDWTransform, self).__init__()
         self.config = self.props
-        self.load_id = self.opts.load_id
+        self.target_alias = self.opts.target
         self._catalog = None
         self._transforms = None
 
@@ -26,7 +27,7 @@ class GDWTransform(CronJob):
 
     yesterday_str = days_ago(1, as_string=False)
     options = [
-        (('-l', '--load-id'), dict(type=str, dest='load_id', required=True)),
+        (('-t', '--target'), dict(type=str, dest='target', required=True)),
         (('-d', '--dry-run'), dict(type=bool, dest='dry_run', default=False))]
 
     @property
@@ -38,32 +39,72 @@ class GDWTransform(CronJob):
     @property
     def transforms(self):
         if self._transforms is None:
-            with open('metadata/transform/{}.yaml'.format(self.load_id)) as f:
-                    self._transforms = yaml.load(f)
+            with open(
+                    'metadata/{}.transform.yaml'
+                    .format(self.target_alias)) as f:
+                self._transforms = yaml.load(f)
         return self._transforms
 
     @property
-    def insert_mode(self):
-        return 'append' if self.transforms.get('append', False) else 'truncate'
+    def target_table(self):
+        return self.catalog.tables[self.target_alias]
 
     @property
-    def target_alias(self):
-        return self.transforms.get('target_alias', self.opts.load_id)
+    def engine(self):
+        return self.catalog.engine_from_alias(self.from_used_alias_names())
 
     def from_aliases(self):
-        for t in self.transforms['from']:
-            if isinstance(t, dict):
-                alias = t.keys()[0]
-                join_dict = t.values()[0]
+        def get_alias_dict(alias_yaml):
+            if isinstance(alias_yaml, str):
+                alias_yaml = {
+                        'alias': alias_yaml,
+                        'how': 'inner',
+                        'as': alias_yaml}
+            elif isinstance(alias_yaml, list):
+                alias_yaml = {
+                        'alias': alias_yaml,
+                        'how': 'inner',
+                        'as': 'unnamed0'}
+
+            aliases_in_from = alias_yaml['alias']
+            how = alias_yaml.get('how', 'inner')
+
+            if isinstance(aliases_in_from, list):
+                as_alias = alias_yaml.get('as', 'unnamed0')
             else:
-                alias = t
-                join_dict = {}
-            yield alias, join_dict
+                as_alias = alias_yaml.get('as', aliases_in_from)
+                aliases_in_from = [aliases_in_from]
 
-    def from_aliases_names(self):
-        return [i[0] for i in self.from_aliases()]
+            # in case the alias has a "/"
+            rename_to = as_alias.split('/')[-1]
+            if len(aliases_in_from) > 1:
+                tables = [
+                        select([self.catalog.tables[a]]) for a
+                        in aliases_in_from]
+                select_tables = alias(union_all(*tables), rename_to)
+            else:
+                table = aliases_in_from[0]
+                select_tables = alias(self.catalog.tables[table], rename_to)
 
-    def target_columns(self):
+            dict_alias = {
+                    'alias': aliases_in_from,
+                    'select': select_tables,
+                    'as': as_alias,
+                    'how': how,
+                    }
+            return dict_alias
+
+        if not isinstance(self.transforms['from'], list):
+            self.transforms['from'] = [self.transforms['from']]
+
+        for t in self.transforms['from']:
+            result = get_alias_dict(t)
+            yield result
+
+    def from_used_alias_names(self):
+        return [alias for i in self.from_aliases() for alias in i['alias']]
+
+    def col_names_expressions(self):
         for c in self.transforms['select']:
             column_name = c.keys()[0]
             column_expression = c.values()[0]
@@ -92,22 +133,24 @@ class GDWTransform(CronJob):
         return joins[0]
 
     def generate_from(self):
-        for alias, join_dict in self.from_aliases():
-            try:
-                on_clause = self.find_joins(left, alias)
-                from_clause = from_clause.join(
-                        self.catalog.tables[alias],
-                        onclause=text(on_clause),
-                        isouter=join_dict.get('how') == 'left')
-                left.append(alias)
-            except NameError:
-                left = [alias]
-                from_clause = self.catalog.tables[alias]
+        from_aliases = list(self.from_aliases())
+        join_dict = from_aliases[0]
+        left = [join_dict['as']]
+        from_clause = join_dict['select']
+
+        for join_dict in from_aliases[1:]:
+            alias = join_dict['as']
+            on_clause = self.find_joins(left, alias)
+            from_clause = from_clause.join(
+                    join_dict['select'],
+                    onclause=text(on_clause),
+                    isouter=join_dict['how'])
+            left.append(alias)
         return from_clause
 
     def generate_select(self):
         result = []
-        for column_name, column_expression in self.target_columns():
+        for column_name, column_expression in self.col_names_expressions():
             result.append(
                     literal_column(column_expression)
                     .label(column_name))
@@ -124,29 +167,20 @@ class GDWTransform(CronJob):
                 select(select_clause)
                 .select_from(from_clause)
                 .where(where_clause))
-        target_table = self.catalog.tables[self.target_alias]
-        sql = target_table.insert().from_select([i[0] for i in self.target_columns()], query)
-        return sql
+        return query
 
     def _run_impl(self):
-        sqls = []
-        target_alias = self.target_alias
-        engine = self.catalog.engine_from_alias([target_alias] + self.from_aliases_names())
+        engine = self.engine
+        sql = self.generate_sql()
+        col_names = [i[0] for i in self.col_names_expressions()]
+        insert_sql = self.target_table.insert().from_select(col_names, sql)
 
-        if self.insert_mode == 'truncate':
-            target_table = self.catalog.tables[self.target_alias]
-            truncate_sql = 'TRUNCATE TABLE {};'.format(target_table)
-            sqls.append(('TRUNCATE', text(truncate_sql)))
-
-        sqls.append(('INSERT', self.generate_sql()))
-
-        for process, sql in sqls:
-            if self.opts.dry_run:
-                _logger.info("Dry run. {} SQL statement not run:".format(process))
-                _logger.info(sql)
-            else:
-                _logger.info("Executing {} process in database".format(process))
-                engine.execute(sql.execution_options(autocommit=True))
+        if self.opts.dry_run:
+            _logger.info("Dry run. INSERT SQL statement not run:")
+            _logger.info(insert_sql)
+        else:
+            _logger.info("Executing INSERT process in database")
+            engine.execute(insert_sql.execution_options(autocommit=True))
 
 
 if __name__ == '__main__':
