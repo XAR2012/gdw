@@ -14,13 +14,11 @@ TOOL_NAME = scriptutil.get_tool_name(DISPLAY_NAME)
 _logger = logging.getLogger(TOOL_NAME)
 
 
-class GDWTransform(CronJob):
+class CronGDWTransform(CronJob):
     def __init__(self):
-        super(GDWTransform, self).__init__()
+        super(CronGDWTransform, self).__init__()
         self.config = self.props
         self.target_alias = self.opts.target
-        self._catalog = None
-        self._transforms = None
 
     name = TOOL_NAME
     display_name = DISPLAY_NAME
@@ -30,11 +28,29 @@ class GDWTransform(CronJob):
         (('-t', '--target'), dict(type=str, dest='target', required=True)),
         (('-d', '--dry-run'), dict(type=bool, dest='dry_run', default=False))]
 
-    @property
-    def catalog(self):
-        if self._catalog is None:
-            self._catalog = GDWCatalog(self.config)
-        return self._catalog
+    def _run_impl(self):
+        gdw_transform = GDWTransform(self.target_alias, self.config)
+        engine = gdw_transform.engine
+        sql = gdw_transform.generate_sql()
+        col_names = [i[0] for i in gdw_transform.col_names_expressions()]
+        insert_sql = (
+                gdw_transform.target_table
+                .insert()
+                .from_select(col_names, sql))
+
+        if self.opts.dry_run:
+            _logger.info("Dry run. INSERT SQL statement not run:")
+            _logger.info(insert_sql)
+        else:
+            _logger.info("Executing INSERT process in database")
+            engine.execute(insert_sql.execution_options(autocommit=True))
+
+
+class GDWTransform(CronJob):
+    def __init__(self, target_alias, config):
+        self.target_alias = target_alias
+        self.catalog = GDWCatalog(config)
+        self._transforms = None
 
     @property
     def transforms(self):
@@ -169,20 +185,7 @@ class GDWTransform(CronJob):
                 .where(where_clause))
         return query
 
-    def _run_impl(self):
-        engine = self.engine
-        sql = self.generate_sql()
-        col_names = [i[0] for i in self.col_names_expressions()]
-        insert_sql = self.target_table.insert().from_select(col_names, sql)
-
-        if self.opts.dry_run:
-            _logger.info("Dry run. INSERT SQL statement not run:")
-            _logger.info(insert_sql)
-        else:
-            _logger.info("Executing INSERT process in database")
-            engine.execute(insert_sql.execution_options(autocommit=True))
-
 
 if __name__ == '__main__':
-    app = GDWTransform()
+    app = CronGDWTransform()
     app.run()
