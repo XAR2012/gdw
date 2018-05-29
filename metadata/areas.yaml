@@ -9,3 +9,11 @@ error:
 source:
     database: bloodmoondb
     schema: source
+
+warehouse:
+    database: bloodmoondb
+    schema: warehouse
+
+bi:
+    database: bloodmoondb
+    schema: bi

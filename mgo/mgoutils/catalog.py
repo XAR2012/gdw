@@ -20,43 +20,73 @@ class GDWTable(Table):
             return self._column_names
 
 
-class GDWTableDict(dict):
-    def __init__(self, engines, aliases, areas):
-        self.engines = engines
-        self.aliases = aliases
-        self.areas = areas
-        self.metadata = sqlalchemy.MetaData()
+class GDWAlias(dict):
+    def __init__(self, name, catalog, alias_yaml=None):
+        self.name = name
+        self.catalog = catalog
+        self._engine = None
 
-    def __getitem__(self, alias_name):
+        # load the yaml file into this object dictionary
+        if alias_yaml:
+            alias_yaml = alias_yaml
+        else:
+            file_path = path.join(
+                        METADATA_DIRECTORY,
+                        '{}.alias.yaml'.format(name))
+            try:
+                with open(file_path) as f:
+                    alias_yaml = yaml.load(f)
+            except IOError:
+                alias_yaml = {}
+
+        super(GDWAlias, self).__init__(alias_yaml)
+
+        # create a sqlalchemy Table into the sql_table property
         try:
-            table = dict.__getitem__(self, alias_name)
+            area = catalog.areas[self['area']]
         except KeyError:
-            alias = self.aliases[alias_name]
-            area = self.areas[alias['area']]
-            database = self.engines[area['database']]
-            table = GDWTable(
-                        alias['table'],
-                        self.metadata,
-                        schema=area['schema'],
-                        autoload=True,
-                        autoload_with=database
+            area = None
+        if area:
+            table_name = self['table']
+            database = catalog.engines[area['database']]
+            self.sql_table = GDWTable(
+                    table_name,
+                    catalog.metadata,
+                    schema=area['schema'],
+                    autoload=True,
+                    autoload_with=database
                     )
-            dict.__setitem__(self, alias_name, table)
-        return table
+        else:
+            self.sql_table = None
 
+    @property
+    def date_column(self):
+        return self.get('date', {}).get('field')
+
+    def get_engine(self):
+        if self._engine is None:
+            try:
+                area = self.catalog.areas[self['area']]
+                self._engine = self.catalog.engines[area['database']]
+            except KeyError:
+                pass
+
+        return self._engine
+
+    def set_engine(self, engine):
+        self._engine = engine
+
+    engine = property(get_engine,set_engine)
 
 class GDWAliasDict(dict):
-    def __init__(self):
-        self.metadata_directory = METADATA_DIRECTORY
+    def __init__(self, catalog):
+        self.catalog = catalog
 
     def __getitem__(self, alias_name):
         try:
             alias = dict.__getitem__(self, alias_name)
         except KeyError:
-            with open(path.join(
-                        self.metadata_directory,
-                        '{}.alias.yaml'.format(alias_name))) as f:
-                alias = yaml.load(f)
+            alias = GDWAlias(alias_name, self.catalog)
             dict.__setitem__(self, alias_name, alias)
         return alias
 
@@ -69,8 +99,8 @@ class GDWCatalog():
         self.engines = {
                 'bloodmoondb': get_orm_engine(database='eravana_db', config=self.config)
                 }
-        self.aliases = GDWAliasDict()
-        self.tables = GDWTableDict(self.engines, self.aliases, self.areas)
+        self.aliases = GDWAliasDict(self)
+        self.metadata = sqlalchemy.MetaData()
 
     def engine_from_alias(self, alias_list):
         engines = set()
@@ -78,13 +108,12 @@ class GDWCatalog():
             alias_list = [alias_list]
         for alias_name in alias_list:
             alias = self.aliases[alias_name]
-            area = self.areas[alias['area']]
-            engine = self.engines[area['database']]
-            engines.add(engine)
+            if alias.engine:
+                engines.add(alias.engine)
 
         if len(engines) > 1:
             raise RuntimeError('All tables should be in the same database')
-        return engine
+        return list(engines)[0]
 
     def stage_file(self, source_system, table_name, date_start, date_end=None):
         file_name = '{}_{}.tsv.gz'.format(table_name.lower(), date_start.strftime('%Y-%m-%d'))
