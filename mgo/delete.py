@@ -32,7 +32,7 @@ class CronGDWDelete(CronJob):
                 self.target_alias, self.config,
                 self.opts.start_datetime,
                 self.opts.end_datetime)
-        engine = gdw_delete.catalog.engine_from_alias(self.target_alias)
+        engine = catalog.engine_from_alias(self.target_alias)
         delete_sql = gdw_delete.generate_delete()
 
         if self.opts.dry_run:
@@ -43,9 +43,8 @@ class CronGDWDelete(CronJob):
             engine.execute(delete_sql.execution_options(autocommit=True))
 
 class GDWDelete():
-    def __init__(self, target_alias_name, config, start=None, end=None, catalog=None):
-        self.catalog = catalog or GDWCatalog(config)
-        self.target_alias = self.catalog.aliases[target_alias_name]
+    def __init__(self, target_alias_name, config, start=None, end=None):
+        self.target_alias = catalog.aliases[target_alias_name]
 
         self.start = parse_date(start or DEFAULT_START)
         self.end = parse_date(end or DEFAULT_END)
@@ -69,10 +68,8 @@ class GDWDelete():
             if what == 'all':
                 return delete(table)
             elif what == 'date_range':
-                date_field = self.target_alias.date_column
-                if isinstance(date_field, str):
-                    date_field = [date_field]
-                date_fields = [target_table.c[col] for col in date_field]
+                date_column_names = self.target_alias.date_columns
+                date_fields = [target_table.c[col] for col in date_column_names]
                 filter_dates = filter_date_range(date_fields, self.start, self.end)
                 return delete(target_table, whereclause=filter_dates)
             else:

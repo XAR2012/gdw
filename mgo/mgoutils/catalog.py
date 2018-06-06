@@ -4,6 +4,7 @@ from fido.common.db import get_orm_engine
 import sqlalchemy
 from sqlalchemy import sql
 from sqlalchemy.schema import Table
+from sqlalchemy import text
 
 METADATA_DIRECTORY = 'metadata'
 PSA_PATH = 'psa'
@@ -23,8 +24,10 @@ class GDWTable(Table):
 class GDWAlias(dict):
     def __init__(self, name, catalog, alias_yaml=None):
         self.name = name
+        self.basename = name.split('/')[-1]
         self.catalog = catalog
         self._engine = None
+        self._where = None
 
         # load the yaml file into this object dictionary
         if alias_yaml:
@@ -60,8 +63,21 @@ class GDWAlias(dict):
             self.sql_table = None
 
     @property
-    def date_column(self):
-        return self.get('date', {}).get('field')
+    def where(self):
+        if self._where is None:
+            where = self.get('where')
+            if where:
+                for c in self.sql_table.c:
+                    where = where.replace(c.name, '{}.{}'.format(self.basename, c.name))
+            self._where = where
+        return self._where
+
+    @property
+    def date_columns(self):
+        date_columns = self.get('date', {}).get('field')
+        if isinstance(date_columns, str):
+            date_columns = [date_columns]
+        return date_columns
 
     def get_engine(self):
         if self._engine is None:
@@ -92,15 +108,17 @@ class GDWAliasDict(dict):
 
 
 class GDWCatalog():
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, config=None):
         with open('metadata/areas.yaml') as f:
             self.areas = yaml.load(f)
+        self.aliases = GDWAliasDict(self)
+        self.metadata = sqlalchemy.MetaData()
+
+    def configure(self, config):
+        self.config = config
         self.engines = {
                 'bloodmoondb': get_orm_engine(database='eravana_db', config=self.config)
                 }
-        self.aliases = GDWAliasDict(self)
-        self.metadata = sqlalchemy.MetaData()
 
     def engine_from_alias(self, alias_list):
         engines = set()
@@ -118,3 +136,5 @@ class GDWCatalog():
     def stage_file(self, source_system, table_name, date_start, date_end=None):
         file_name = '{}_{}.tsv.gz'.format(table_name.lower(), date_start.strftime('%Y-%m-%d'))
         return path.join(PSA_PATH, source_system, table_name.lower(), file_name)
+
+catalog = GDWCatalog()

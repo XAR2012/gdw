@@ -2,12 +2,13 @@ import logging
 import yaml
 from cmdlineutil import CronJob
 import de_common.scriptutil as scriptutil
-from mgoutils.catalog import GDWCatalog, GDWAlias
+from mgoutils.catalog import GDWTable, catalog
+from mgoutils.merges import find_joins, merge_tables
 from mgoutils.sqlutils import compile_sql
 from mgoutils.dateutils import DEFAULT_START, DEFAULT_END, filter_date_range, parse_date
 from sqlalchemy import text
 from sqlalchemy.sql import select, literal_column, and_
-from sqlalchemy.sql.expression import union_all, alias
+import sqlalchemy
 
 __author__ = 'jvalenzuela'
 DISPLAY_NAME = scriptutil.get_display_name(__file__)
@@ -28,9 +29,10 @@ class CronGDWTransform(CronJob):
         (('-t', '--target'), dict(type=str, dest='target', required=True)),
         (('-s', '--start'), dict(type=str, dest='start_datetime', required=False)),
         (('-e', '--end'), dict(type=str, dest='end_datetime', required=False)),
-        (('-i', '--insert-table'), dict(type=bool, dest='insert_table', default=None))]
+        (('-i', '--insert-table'), dict(type=str, dest='insert_table', default=None))]
 
     def _run_impl(self):
+        catalog.configure(self.config)
         gdw_transform = GDWTransform(
                 self.target_alias, self.config,
                 self.opts.start_datetime,
@@ -40,12 +42,12 @@ class CronGDWTransform(CronJob):
 
         if self.opts.insert_table:
             schema, table_name = self.opts.insert_table.split('.')
-            target_table = Table(
+            target_table = GDWTable(
                     table_name,
                     catalog.metadata,
                     schema=schema,
                     autoload=True,
-                    autoload_with=database
+                    autoload_with=engine
                     )
 
             insert_sql = (
@@ -60,9 +62,8 @@ class CronGDWTransform(CronJob):
 
 
 class GDWTransform(CronJob):
-    def __init__(self, target_alias_name, config=None, start=None, end=None, catalog=None):
-        self.catalog = catalog or GDWCatalog(config)
-        self.target_alias = self.catalog.aliases[target_alias_name]
+    def __init__(self, target_alias_name, config=None, start=None, end=None):
+        self.target_alias = catalog.aliases[target_alias_name]
         self._transforms = None
         self.start = parse_date(start or DEFAULT_START)
         self.end = parse_date(end or DEFAULT_END)
@@ -82,56 +83,61 @@ class GDWTransform(CronJob):
 
     @property
     def engine(self):
-        return self.catalog.engine_from_alias(self.from_used_alias_names())
+        return catalog.engine_from_alias(self.from_used_alias_names())
 
-    def from_aliases(self):
-        def get_alias_dict(alias_yaml):
-            if isinstance(alias_yaml, str):
-                alias_yaml = {
-                        'alias': alias_yaml,
+    def from_definitions(self):
+        def get_alias_dict(single_from):
+            # convert this into a dictionary with the expected fields
+            if isinstance(single_from, str):
+                single_from = {
+                        'alias': [single_from],
                         'how': 'inner',
-                        'as': alias_yaml}
-            elif isinstance(alias_yaml, list):
-                alias_yaml = {
-                        'alias': alias_yaml,
+                        'as': single_from}
+            elif isinstance(single_from, list):
+                single_from = {
+                        'alias': single_from,
                         'how': 'inner',
-                        'as': 'unnamed0'}
+                        'as': single_from[0]}
+            elif isinstance(single_from['alias'], str):
+                single_from['alias'] = [single_from['alias']]
 
-            aliases_in_from = alias_yaml['alias']
-            how = alias_yaml.get('how', 'inner')
+            alias_names = single_from['alias']
 
-            if isinstance(aliases_in_from, list):
-                as_alias = alias_yaml.get('as', 'unnamed0')
-            else:
-                as_alias = alias_yaml.get('as', aliases_in_from)
-                aliases_in_from = [aliases_in_from]
-
-            # in case the alias has a "/"
-            rename_to = as_alias.split('/')[-1]
-            sql_tables = []
-            for table in aliases_in_from:
-                sql_table = self.catalog.aliases[table].sql_table
-                if sql_table is None:
+            from IPython.core.debugger import Tracer; Tracer()()
+            # if some aliases have no table, try to get the transform sql
+            for alias in alias_names:
+                if catalog.aliases[alias].sql_table is None:
                     gdw_transform = GDWTransform(
-                            table, self.catalog.config,
+                            alias, catalog.config,
                             self.start,
                             self.end)
                     sql_table = gdw_transform.generate_sql()
-                    self.catalog.aliases[table].sql_table = sql_table
-                    self.catalog.aliases[table].engine = gdw_transform.engine
+                    catalog.aliases[alias].sql_table = sql_table
+                    catalog.aliases[alias].engine = gdw_transform.engine
+                # TODO filter the date range
 
-                    #TODO filter the date range
-                sql_tables.append(sql_table)
-            if len(sql_tables) > 1:
-                select_tables = alias(union_all(*sql_tables), rename_to)
+            aliases = [catalog.aliases[a] for a in alias_names]
+
+            if len(alias_names) > 1:
+                merge_type = single_from.get('merge')
+                as_alias, source_sql = merge_tables(aliases,
+                        merge_type,
+                        by=single_from.get('by'),
+                        as_alias=single_from.get('as'),
+                        start=self.start, end=self.end)
+                where = None
             else:
-                select_tables = alias(sql_tables[0], rename_to)
+                as_alias = single_from.get('as', alias_names[0])
+                rename_to = as_alias.split('/')[-1]
+                source_sql = sqlalchemy.alias(aliases[0].sql_table, rename_to),
+                where = aliases[0].where
 
             dict_alias = {
-                    'alias': aliases_in_from,
-                    'select': select_tables,
+                    'alias': alias_names,
+                    'select': source_sql,
+                    'where': where,
                     'as': as_alias,
-                    'how': how,
+                    'how': single_from.get('how', 'inner'),
                     }
             return dict_alias
 
@@ -143,7 +149,7 @@ class GDWTransform(CronJob):
             yield result
 
     def from_used_alias_names(self):
-        return [alias for i in self.from_aliases() for alias in i['alias']]
+        return [alias for i in self.from_definitions() for alias in i['alias']]
 
     def col_names_expressions(self):
         for c in self.transforms['select']:
@@ -154,42 +160,21 @@ class GDWTransform(CronJob):
     def col_names(self):
         return [i[0] for i in self.col_names_expressions()]
 
-    def relationship_with(self, alias, with_alias):
-        alias = self.catalog.aliases[alias]
-        for relation_with, relation_dict in alias.get('relationships').items():
-            if relation_with == with_alias:
-                return relation_dict
-            return None
-
-    def find_joins(self, left, right):
-        joins = []
-        if not isinstance(left, list):
-            left = [left]
-
-        for l in left:
-            join_dict = self.relationship_with(l, right)
-            if join_dict:
-                joins.append(join_dict['join_on'])
-        if len(joins) > 1:
-            raise RuntimeError('Join loop found in the relationships')
-        elif len(joins) == 0:
-            raise RuntimeError('No relationship found')
-        return joins[0]
-
     def generate_from(self):
-        from_aliases = list(self.from_aliases())
-        join_dict = from_aliases[0]
-        left = [join_dict['as']]
-        from_clause = join_dict['select']
+        from_definitions = list(self.from_definitions())
+        aliases = [catalog.aliases[f['as']] for f in from_definitions]
+        joins = [join['join_on'] for join in find_joins(aliases)]
+        from_clause = from_definitions[0]['select']
 
-        for join_dict in from_aliases[1:]:
-            alias = join_dict['as']
-            on_clause = self.find_joins(left, alias)
+        for from_definition, join in zip(from_definitions[1:], joins):
+            alias = catalog.aliases[from_definition['as']]
+            on_clause = text(join)
+            if alias.where:
+                on_clause = and_(on_clause, alias.where)
             from_clause = from_clause.join(
-                    join_dict['select'],
-                    onclause=text(on_clause),
-                    isouter=join_dict['how'])
-            left.append(alias)
+                    from_definition['select'],
+                    onclause=on_clause,
+                    isouter=from_definition['how'])
         return from_clause
 
     def generate_select(self):
@@ -207,17 +192,19 @@ class GDWTransform(CronJob):
         if transform_where:
             filters.append(text(transform_where))
 
-        from_aliases = list(self.from_aliases())
-        driving_from = from_aliases[0]
+        from_definitions = list(self.from_definitions())
+        driving_from = from_definitions[0]
         driving_alias_name = driving_from['alias']
         if len(driving_alias_name) == 1:
             driving_alias_name = driving_alias_name[0]
-            driving_alias = self.catalog.aliases[driving_alias_name]
-            date_field_name = driving_alias.date_column
+            driving_alias = catalog.aliases[driving_alias_name]
+            driving_alias = catalog.aliases[driving_alias_name]
+            if driving_alias.where is not None:
+                filters.append(driving_alias.where)
+
+            date_field_name = driving_alias.date_columns
             if date_field_name:
                 date_fields = []
-                if isinstance(date_field_name, str):
-                    date_field_name = [date_field_name]
                 for col in date_field_name:
                     date_field = driving_from['select'].c[col]
                     date_field = from_clause.corresponding_column(date_field)

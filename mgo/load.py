@@ -2,7 +2,7 @@ import logging
 import collections
 from cmdlineutil import CronJob
 import de_common.scriptutil as scriptutil
-from mgoutils.catalog import GDWCatalog
+from mgoutils.catalog import catalog
 from mgoutils.sqlutils import compile_sql
 from mgoutils.dateutils import DEFAULT_START, DEFAULT_END, filter_date_range, parse_date
 from transform import GDWTransform
@@ -35,6 +35,7 @@ class CronGDWLoad(CronJob):
         (('-d', '--dry-run'), dict(type=bool, dest='dry_run', default=False))]
 
     def _run_impl(self):
+        catalog.configure(self.config)
         gdw_load = GDWLoad(
                 self.target_alias, self.config,
                 self.opts.start_datetime,
@@ -57,8 +58,7 @@ class CronGDWLoad(CronJob):
 # delete the data for the specified day
 class GDWLoad():
     def __init__(self, target_alias_name, config, start=None, end=None):
-        self.catalog = GDWCatalog(config)
-        self.target_alias = self.catalog.aliases[target_alias_name]
+        self.target_alias = catalog.aliases[target_alias_name]
         self.config = config
         self.target_table = self.target_alias.sql_table
 
@@ -67,7 +67,7 @@ class GDWLoad():
 
     @property
     def engine(self):
-        return self.catalog.engine_from_alias(self.target_alias.name)
+        return catalog.engine_from_alias(self.target_alias.name)
 
     def generate_insert(self, gdw_transform):
         insert_strategy = get_insert_strategy(gdw_transform)
