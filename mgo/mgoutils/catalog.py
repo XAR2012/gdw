@@ -8,6 +8,8 @@ from sqlalchemy import text
 
 METADATA_DIRECTORY = 'metadata'
 PSA_PATH = 'psa'
+STATE_START_COLUMN = 'gdw_state_start'
+STATE_END_COLUMN = 'gdw_state_end'
 
 class GDWTable(Table):
     @property
@@ -73,11 +75,19 @@ class GDWAlias(dict):
         return self._where
 
     @property
-    def date_columns(self):
-        date_columns = self.get('date', {}).get('field')
-        if isinstance(date_columns, str):
-            date_columns = [date_columns]
-        return date_columns
+    def is_deleted_column(self):
+        return self.get('is_deleted')
+
+    @property
+    def modified_date_column(self):
+        return self.get('date', {}).get('modified')
+
+    @property
+    def state_date_columns(self):
+        state_date_columns = self.get('date', {}).get('state')
+        if isinstance(state_date_columns, str):
+            state_date_columns = [state_date_columns]
+        return state_date_columns
 
     def get_engine(self):
         if self._engine is None:

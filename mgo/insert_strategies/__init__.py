@@ -6,7 +6,9 @@ def choose_insert_strategy(load_definition):
         insert_strategy = 'simple_insert.SimpleInsert'
     elif how == 'dimension':
         type = load_definition.get('type', 'insert')
-        if type == 'daily':
+        if type == 'scd2':
+            insert_strategy = 'dimension.SCD2DimensionStrategy'
+        elif type == 'daily':
             insert_strategy = 'dimension.DailyDimensionStrategy'
 
     return insert_strategy

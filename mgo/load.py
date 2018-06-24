@@ -73,7 +73,7 @@ class GDWLoad():
         insert_strategy = get_insert_strategy(gdw_transform)
         return insert_strategy.generate_insert()
 
-    # this function generates a list of sql stagements needed to load target alias
+    # this function generates a list of sql statements needed to load target alias
     # 1. delete affected partition/date range. Uses the Delete operator
     # 2. generate the transform as a base for the insert. Uses the Transform operator
     # 3. generate the insert part. The insert will depend on whether we want to update
@@ -81,7 +81,7 @@ class GDWLoad():
     def generate_load(self):
 
         gdw_delete = GDWDelete(
-                self.target_alias.name, self.config,
+                self.target_alias.name,
                 self.start,
                 self.end)
         delete_sql = gdw_delete.generate_delete()

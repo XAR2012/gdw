@@ -57,7 +57,7 @@ class CronGDWTransform(CronJob):
             _logger.info("Executing INSERT process in database")
             engine.execute(insert_sql.execution_options(autocommit=True))
         else:
-            _logger.info("Dry run. INSERT SQL statement not run:")
+            _logger.info("Dry run. SQL statement not run:")
             _logger.info(compile_sql(sql, engine))
 
 
@@ -103,7 +103,6 @@ class GDWTransform(CronJob):
 
             alias_names = single_from['alias']
 
-            from IPython.core.debugger import Tracer; Tracer()()
             # if some aliases have no table, try to get the transform sql
             for alias in alias_names:
                 if catalog.aliases[alias].sql_table is None:
@@ -118,12 +117,13 @@ class GDWTransform(CronJob):
 
             aliases = [catalog.aliases[a] for a in alias_names]
 
-            if len(alias_names) > 1:
-                merge_type = single_from.get('merge')
-                as_alias, source_sql = merge_tables(aliases,
+            merge_type = single_from.get('merge', 'union all')
+            if len(alias_names) > 1 or merge_type == 'modifications':
+                as_alias = single_from.get('as') or aliases[0].name
+                source_sql, state_date_columns, is_deleted_clause = merge_tables(aliases,
                         merge_type,
                         by=single_from.get('by'),
-                        as_alias=single_from.get('as'),
+                        as_alias=as_alias,
                         start=self.start, end=self.end)
                 where = None
             else:
@@ -131,11 +131,16 @@ class GDWTransform(CronJob):
                 rename_to = as_alias.split('/')[-1]
                 source_sql = sqlalchemy.alias(aliases[0].sql_table, rename_to),
                 where = aliases[0].where
+                state_date_columns = aliases[0].state_date_columns
+                is_deleted_clause = aliases[0].is_deleted_column
 
             dict_alias = {
                     'alias': alias_names,
                     'select': source_sql,
                     'where': where,
+                    'merge_type': merge_type,
+                    'state_date_columns': state_date_columns,
+                    'is_deleted_clause': is_deleted_clause,
                     'as': as_alias,
                     'how': single_from.get('how', 'inner'),
                     }
@@ -156,6 +161,19 @@ class GDWTransform(CronJob):
             column_name = c.keys()[0]
             column_expression = c.values()[0]
             yield column_name, column_expression
+
+        from_definitions = list(self.from_definitions())
+        driving_from = from_definitions[0]
+        driving_alias_name = driving_from['as']
+
+        state_date_columns = driving_from['state_date_columns']
+        if state_date_columns:
+            yield 'gdw_state_start', '{}.{}'.format(driving_alias_name, state_date_columns[0])
+            yield 'gdw_state_end', '{}.{}'.format(driving_alias_name, state_date_columns[1])
+
+        is_deleted_clause = driving_from['is_deleted_clause']
+        if state_date_columns:
+            yield 'gdw_is_deleted', is_deleted_clause
 
     def col_names(self):
         return [i[0] for i in self.col_names_expressions()]
@@ -195,23 +213,18 @@ class GDWTransform(CronJob):
         from_definitions = list(self.from_definitions())
         driving_from = from_definitions[0]
         driving_alias_name = driving_from['alias']
-        if len(driving_alias_name) == 1:
+        if len(driving_alias_name) == 1 and driving_from['merge_type'] != 'modifications':
             driving_alias_name = driving_alias_name[0]
-            driving_alias = catalog.aliases[driving_alias_name]
             driving_alias = catalog.aliases[driving_alias_name]
             if driving_alias.where is not None:
                 filters.append(driving_alias.where)
 
-            date_field_name = driving_alias.date_columns
-            if date_field_name:
-                date_fields = []
-                for col in date_field_name:
-                    date_field = driving_from['select'].c[col]
-                    date_field = from_clause.corresponding_column(date_field)
-                    date_fields.append(date_field)
-                filter_dates = filter_date_range(
-                        date_fields, self.start, self.end)
-                filters.append(filter_dates)
+            if driving_alias.modified_date_column:
+                modification_date = driving_from['select'].c[driving_alias.modified_date_column]
+                filter_modifications = filter_date_range(
+                        from_clause.corresponding_column(modification_date),
+                        self.start, self.end)
+                filters.append(filter_modifications)
 
         # filters = [ x for x in filters if x is not None ] # remove empty filters
         if filters:

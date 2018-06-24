@@ -1,6 +1,6 @@
 stage:
     database: bloodmoondb
-    schema: incoming
+    schema: stage
 
 error:
     database: bloodmoondb
