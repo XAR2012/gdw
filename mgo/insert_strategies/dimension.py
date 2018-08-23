@@ -38,10 +38,15 @@ class DimensionStrategy(InsertStrategy):
         if isinstance(priority_columns, str):
             priority_columns = [priority_columns]
         priority_which = self.target_alias['load'].get('priority_which', 'max')
-        if priority_which == 'max':
-            order_by = [literal_column(c).desc() for c in priority_columns]
-        else:
-            order_by = [literal_column(c) for c in priority_columns]
+        if isinstance(priority_which, str):
+            priority_which = [priority_which]
+
+        order_by = []
+        for c, which in zip(priority_columns, priority_which):
+            if which == 'max':
+                order_by.append(literal_column(c).desc())
+            else:
+                order_by.append(literal_column(c))
         order_by.append(literal_column(STATE_START_COLUMN).desc())
         order_by.append(literal_column(STATE_END_COLUMN).desc())
         return order_by
@@ -74,7 +79,6 @@ class SCD2DimensionStrategy(DimensionStrategy):
                     select(select_sql_columns))
                 )
 
-        return result #TODO REMOVE ME
         # select all from existing dimension. look up the object key in stage and remove from
         # gdw_state_dts_range that already is calculated on stage
         select_sql = sqlalchemy.alias(self.select_sql, 'source_transform')

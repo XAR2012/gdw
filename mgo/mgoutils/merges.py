@@ -41,7 +41,7 @@ def merge_changes(aliases, by=None, start=None, end=None, rename_to=None):
     # and dates (which correspond to the state changes)
     # once we have that we can find the different values in each of the source tables
     # for those keys and date ranges
-    def keys_and_changes(aliases, by, start, end):
+    def keys_and_changes(aliases, by_columns, start, end):
         keys_and_dates = []
         for alias in aliases:
             from_clause = sqlalchemy.alias(alias.sql_table, alias.basename)
@@ -50,10 +50,6 @@ def merge_changes(aliases, by=None, start=None, end=None, rename_to=None):
                     start, end)
             if alias.where:
                 where_clause = and_(alias.where, where_clause)
-
-            by_columns = [
-                    literal_column('{}'.format(c)).label(c)
-                    for c in by]
 
             # one row for state start and one for end
             for state_date_column in alias.state_date_columns:
@@ -65,6 +61,10 @@ def merge_changes(aliases, by=None, start=None, end=None, rename_to=None):
                         .select_from(from_clause)
                         .where(where_clause))
         return union(*keys_and_dates)
+
+    by_columns = [
+            literal_column('{}'.format(c)).label(c)
+            for c in by]
 
     keys_and_dts_start = sqlalchemy.alias(
             keys_and_changes(aliases, by, start, end),

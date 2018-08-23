@@ -86,8 +86,12 @@ class GDWTransform(CronJob):
         return catalog.engine_from_alias(self.from_used_alias_names())
 
     def from_definitions(self):
+        """convert this part of the from into a dictionary
+        we want to have these fields in the dictionary
+        - alias(list of alias)
+        - how(how to merge the source alias. Could be union, union_all, etc.)
+        - as(rename to a different name. you will use this name in the select part)"""
         def get_alias_dict(single_from):
-            # convert this into a dictionary with the expected fields
             if isinstance(single_from, str):
                 single_from = {
                         'alias': [single_from],
@@ -103,7 +107,9 @@ class GDWTransform(CronJob):
 
             alias_names = single_from['alias']
 
-            # if some aliases have no table, try to get the transform sql
+            # if some aliases have no table, try to get the transform sql as
+            # we allow to specify either existing tables or other transforms
+            # then save it to the catalog so we can use it as normal
             for alias in alias_names:
                 if catalog.aliases[alias].sql_table is None:
                     gdw_transform = GDWTransform(
@@ -117,7 +123,11 @@ class GDWTransform(CronJob):
 
             aliases = [catalog.aliases[a] for a in alias_names]
 
+            # if we have several tables in this part of the from we
+            # have to merge them. by default with an union all
             merge_type = single_from.get('merge', 'union all')
+            # we also "merge" even with only one source if we are merging
+            # the modifications with pk and dates
             if len(alias_names) > 1 or merge_type == 'modifications':
                 as_alias = single_from.get('as') or aliases[0].name
                 source_sql, state_date_columns, is_deleted_clause = merge_tables(aliases,
@@ -134,7 +144,7 @@ class GDWTransform(CronJob):
                 state_date_columns = aliases[0].state_date_columns
                 is_deleted_clause = aliases[0].is_deleted_column
 
-            dict_alias = {
+            return {
                     'alias': alias_names,
                     'select': source_sql,
                     'where': where,
@@ -144,7 +154,6 @@ class GDWTransform(CronJob):
                     'as': as_alias,
                     'how': single_from.get('how', 'inner'),
                     }
-            return dict_alias
 
         if not isinstance(self.transforms['from'], list):
             self.transforms['from'] = [self.transforms['from']]
@@ -226,7 +235,6 @@ class GDWTransform(CronJob):
                         self.start, self.end)
                 filters.append(filter_modifications)
 
-        # filters = [ x for x in filters if x is not None ] # remove empty filters
         if filters:
             return and_(*filters)
         else:
