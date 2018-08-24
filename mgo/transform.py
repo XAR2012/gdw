@@ -58,7 +58,7 @@ class CronGDWTransform(CronJob):
             engine.execute(insert_sql.execution_options(autocommit=True))
         else:
             _logger.info("Dry run. SQL statement not run:")
-            _logger.info(compile_sql(sql, engine))
+            print(compile_sql(sql, engine))
 
 
 class GDWTransform(CronJob):
