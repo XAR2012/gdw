@@ -1,0 +1,5 @@
+from:
+    - test/chase_ract0010_nosave
+select:
+    - invoice_id: invoice_id
+    - account_num: account_num

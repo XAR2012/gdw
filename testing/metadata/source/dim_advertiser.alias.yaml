@@ -1,0 +1,5 @@
+area: source
+table: dim_advertiser
+
+date:
+    field: submission_date

@@ -1,0 +1,5 @@
+area: source
+table: tblironrevenue_collection
+
+date:
+    field: submission_date

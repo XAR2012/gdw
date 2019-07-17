@@ -1,0 +1,8 @@
+area: source
+table: tbladcusers_accounts
+
+date:
+    state: [date_assignment_starts, date_assignment_ends]
+    modified: etl_updated_timestamp
+    end_inclusive: false
+is_deleted: is_deleted

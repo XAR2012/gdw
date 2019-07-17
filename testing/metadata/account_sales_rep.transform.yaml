@@ -1,0 +1,10 @@
+from:
+    - alias: [test/account_reps]
+      merge: modifications
+      by: [account_id, relationship]
+      as: accounts
+select:
+    - account_id: accounts.account_id
+    - relationship: account_reps.relationship
+    - date_added: account_reps.date_added
+    - rep_id: account_reps.user_id

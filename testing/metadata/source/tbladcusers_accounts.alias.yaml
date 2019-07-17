@@ -1,0 +1,5 @@
+area: source
+table: tbladcusers_accounts
+
+date:
+    field: [date_assignment_starts, date_assignment_ends]

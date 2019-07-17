@@ -1,0 +1,10 @@
+area: source
+table: tbladcusers_accounts
+
+date:
+    modified: etl_updated_timestamp
+    state: [date_assignment_starts, date_assignment_ends]
+    end_inclusive: false
+is_deleted: is_deleted
+where:
+    relationship = 'SALES_REP'

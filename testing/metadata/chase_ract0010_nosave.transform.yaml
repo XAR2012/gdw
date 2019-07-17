@@ -1,0 +1,11 @@
+from:
+    - test/chase_ract0010
+    - alias: test/tbladcinvoices
+      how: left
+      as: test/tbladcinvoices
+select:
+    - invoice_id: tbladcinvoices.transaction_id
+    - account_num: chase_ract0010.account_num
+where:
+    tbladcinvoices.transaction_id > 0
+    AND tbladcinvoices.transaction_id < 999999999

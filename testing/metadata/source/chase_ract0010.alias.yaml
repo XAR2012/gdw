@@ -1,0 +1,12 @@
+area: source
+table: chase_ract0010
+
+date:
+    modified: submission_date
+
+relationships:
+    source/tbladcinvoices:
+        join_on: tbladcinvoices.transaction_id = CAST(chase_ract0010.merchant_order_num AS INTEGER)
+
+where:
+    chase_ract0010.transaction_id > 0

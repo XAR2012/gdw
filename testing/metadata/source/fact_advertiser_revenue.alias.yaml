@@ -1,0 +1,9 @@
+area: source
+table: fact_advertiser_revenue
+
+date:
+    field: submission_date
+
+relationships:
+    test/dim_advertiser:
+        join_on: dim_advertiser.advertiser_key = fact_advertiser_revenue.advertiser_key

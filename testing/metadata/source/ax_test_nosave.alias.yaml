@@ -1,0 +1,9 @@
+area: source
+table: ax_test
+delete:
+    how: delete
+    what: date_range
+load:
+    how: insert
+date:
+    field: submission_date

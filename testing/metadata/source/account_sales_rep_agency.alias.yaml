@@ -1,0 +1,9 @@
+area: source
+table: tbladcusers_accounts
+
+date:
+    state: [date_assignment_starts, date_assignment_ends]
+    end_inclusive: false
+is_deleted: is_deleted
+where:
+    relationship = 'AGENCY_REP'
